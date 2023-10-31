@@ -8,12 +8,13 @@
 #define MAX_RESPONSE_SIZE 1024
 
 int main(int argc, char* argv[]) {
-    if (argc != 2) {
-        fprintf(stderr, "Sử dụng: %s <URL>\n", argv[0]);
+    if (argc != 3) {
+        fprintf(stderr, "Sử dụng: %s <URL> <output_file>\n", argv[0]);
         return 1;
     }
 
     char *url = argv[1];
+    char *output_filename = argv[2];
     char hostname[256];
     char path[256];
 
@@ -68,7 +69,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    FILE *output_file = fopen("output.html", "w");
+    FILE *output_file = fopen(output_filename, "w");
     if (!output_file) {
         fprintf(stderr, "Không thể mở tệp để ghi nội dung.\n");
         return 1;
@@ -76,12 +77,27 @@ int main(int argc, char* argv[]) {
 
     char response[MAX_RESPONSE_SIZE];
     ssize_t bytes_received;
+    int body_started = 0;  // Dùng để xác định khi phần body bắt đầu
 
     while ((bytes_received = recv(client_socket, response, sizeof(response) - 1, 0)) > 0) {
         response[bytes_received] = '\0';
-        //printf("%s", response);
-        fprintf(output_file, "%s", response);
+
+        if (!body_started) {
+            // Tìm chuỗi "\r\n\r\n" để xác định phần body bắt đầu
+            char *body_start = strstr(response, "\r\n\r\n");
+            if (body_start) {
+                body_start += 4;  // Bỏ qua "\r\n\r\n" và chuyển đến phần body
+                body_started = 1;
+
+                // Ghi phần body vào tệp
+                fprintf(output_file, "%s", body_start);
+            }
+        } else {
+            // Ghi phần body vào tệp
+            fprintf(output_file, "%s", response);
+        }
     }
+
     fclose(output_file);
     close(client_socket);
 
