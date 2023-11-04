@@ -118,43 +118,41 @@ int main(int argc, char *argv[])
                 {
                     const char *content_length_str = strstr(response, "Content-Length:") + 15;
                     content_length = atoi(content_length_str);
-                    // Kiểm tra nếu đây là truyền dữ liệu theo chế độ "Transfer-Encoding: chunked"
-                    if (is_transfer_chunked(response))
+
+                    // Ghi phần body vào tệp theo kích thước của Content-Length
+                    int bytes_to_write = bytes_received - (body_start - response);
+                    if (bytes_to_write > content_length)
                     {
-                        char *chunk_start = body_start;
-                        while (1)
-                        {
-                            // Tìm phần cuối của kích thước chunk hiện tại
-                            char *chunk_size_end = strstr(chunk_start, "\r\n");
-                            if (!chunk_size_end)
-                                break;                                      // Không còn đoạn hợp lệ nào nữa
-                            int chunk_size = strtol(chunk_start, NULL, 16); // Lấy kích thước chunk
-                            if (chunk_size == 0)
-                            {
-                                break; // Kết thúc dữ liệu chunked
-                            }
-                            // Di chuyển về đầu chunk data
-                            chunk_start = chunk_size_end + 2;
-                            // Ghi dữ liệu chunk vào file đầu ra
-                            fwrite(chunk_start, 1, chunk_size, output_file);
-                            //fwrite(chunk_start, 1, bytes_received - (chunk_start - response), output_file);
-                            // Di chuyển tới đoạn tiếp theo
-                            if (chunk_start[0] == '\r' && chunk_start[1] == '\n')
-                            {
-                                chunk_start += 2; // Bỏ qua "\r\n" sau dữ liệu chunk
-                            }
-                        }
+                        bytes_to_write = content_length;
                     }
-                    else
+                    fprintf(output_file, "%.*s", bytes_to_write, body_start);
+                    content_length -= bytes_to_write;
+                }
+                // Kiểm tra nếu đây là truyền dữ liệu theo chế độ "Transfer-Encoding: chunked"
+                else if (is_transfer_chunked(response))
+                {
+                    char *chunk_start = body_start;
+                    int chunk_size;
+                    while (1)
                     {
-                        // Ghi phần body vào tệp theo kích thước của Content-Length
-                        int bytes_to_write = bytes_received - (body_start - response);
-                        if (bytes_to_write > content_length)
+                        // Tìm phần cuối của kích thước chunk hiện tại
+                        char *chunk_size_end = strstr(chunk_start, "\r\n");
+                        if (!chunk_size_end)
+                            break; // Không còn đoạn hợp lệ nào nữa
+
+                        chunk_size = strtol(chunk_start, NULL, 16); // Lấy kích thước chunk
+                        if (chunk_size == 0)
+                            break; // Kết thúc dữ liệu chunked
+
+                        // Di chuyển về đầu chunk data
+                        chunk_start = chunk_size_end + 2;
+                        // Ghi dữ liệu chunk vào file đầu ra
+                        fprintf(output_file, "%.*s", chunk_size, chunk_start);
+                        //  Di chuyển tới đoạn tiếp theo
+                        if (chunk_start[0] == '\r' && chunk_start[1] == '\n')
                         {
-                            bytes_to_write = content_length;
+                            chunk_start += 2; // Bỏ qua "\r\n" sau dữ liệu chunk
                         }
-                        fprintf(output_file, "%.*s", bytes_to_write, body_start);
-                        content_length -= bytes_to_write;
                     }
                 }
                 else
