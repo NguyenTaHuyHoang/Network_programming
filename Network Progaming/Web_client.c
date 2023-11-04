@@ -113,6 +113,7 @@ int main(int argc, char *argv[])
             {
                 body_start += 4; // Bỏ qua "\r\n\r\n" và chuyển đến phần body
                 body_started = 1;
+                // Kiểm tra nếu đây là truyền dữ liệu theo chế độ Content-Length"
                 if (is_content_length(response))
                 {
                     const char *content_length_str = strstr(response, "Content-Length:") + 15;
@@ -123,25 +124,25 @@ int main(int argc, char *argv[])
                         char *chunk_start = body_start;
                         while (1)
                         {
-                            // Find the end of the current chunk size
+                            // Tìm phần cuối của kích thước chunk hiện tại
                             char *chunk_size_end = strstr(chunk_start, "\r\n");
                             if (!chunk_size_end)
-                                break; // No more valid chunks
-
-                            int chunk_size = strtol(chunk_start, NULL, 16); // Get chunk size
+                                break;                                      // Không còn đoạn hợp lệ nào nữa
+                            int chunk_size = strtol(chunk_start, NULL, 16); // Lấy kích thước chunk
                             if (chunk_size == 0)
                             {
-                                break; // End of chunked data
+                                break; // Kết thúc dữ liệu chunked
                             }
-
-                            // Move to the start of the chunk data
+                            // Di chuyển về đầu chunk data
                             chunk_start = chunk_size_end + 2;
-
-                            // Write the chunk data to the output file
+                            // Ghi dữ liệu chunk vào file đầu ra
                             fwrite(chunk_start, 1, chunk_size, output_file);
-
-                            // Move to the next chunk
-                            chunk_start += chunk_size + 2; // Skip chunk data and "\r\n"
+                            //fwrite(chunk_start, 1, bytes_received - (chunk_start - response), output_file);
+                            // Di chuyển tới đoạn tiếp theo
+                            if (chunk_start[0] == '\r' && chunk_start[1] == '\n')
+                            {
+                                chunk_start += 2; // Bỏ qua "\r\n" sau dữ liệu chunk
+                            }
                         }
                     }
                     else
