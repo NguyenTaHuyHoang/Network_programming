@@ -2,227 +2,132 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
-#include <arpa/inet.h>
 #include <netdb.h>
 #include <unistd.h>
+#include <arpa/inet.h>
 
-#define BUFFER_SIZE 1024
-
-// A function to parse the URL and get the host name, path and port number
-void parse_url(char *url, char **host, char **path, int *port) {
-    char *p;
-    p = strstr(url, "://");
-    if (p == NULL) {
-        fprintf(stderr, "Invalid URL format\n");
-        exit(1);
-    }
-    *p = '\0';
-    if (strcmp(url, "http") != 0) {
-        fprintf(stderr, "Only http protocol is supported\n");
-        exit(1);
-    }
-    *p = ':';
-    p += 3;
-    *host = p;
-    p = strchr(*host, ':');
-    if (p != NULL) {
-        *p = '\0';
-        p++;
-        *port = atoi(p);
-        if (*port <= 0) {
-            fprintf(stderr, "Invalid port number\n");
-            exit(1);
-        }
-    } else {
-        *port = 80;
-    }
-    p = strchr(*host, '/');
-    if (p != NULL) {
-        *p = '\0';
-        p++;
-        *path = p;
-    } else {
-        *path = "";
-    }
-}
-
-// A function to create a socket and connect to the server
-int create_socket(char *host, int port) {
-    int sock;
-    struct sockaddr_in server_addr;
-    struct hostent *server;
-
-    sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock < 0) {
-        perror("socket");
-        exit(1);
-    }
-
-    server = gethostbyname(host);
-    if (server == NULL) {
-        fprintf(stderr, "Host not found\n");
-        exit(1);
-    }
-
-    memset(&server_addr, 0, sizeof(server_addr));
-    server_addr.sin_family = AF_INET;
-    memcpy(&server_addr.sin_addr.s_addr, server->h_addr_list, server->h_length);
-    server_addr.sin_port = htons(port);
-
-    if (connect(sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
-        perror("connect");
-        exit(1);
-    }
-    
-    return sock;
-}
-
-// A function to send a GET request to the server
-void send_request(int sock, char *host, char *path) {
-    char buffer[BUFFER_SIZE];
-    
-    sprintf(buffer, "GET /%s HTTP/1.1\r\n", path);
-    send(sock, buffer, strlen(buffer), 0);
-
-    sprintf(buffer, "Host: %s\r\n", host);
-    send(sock, buffer, strlen(buffer), 0);
-
-    sprintf(buffer, "Connection: close\r\n\r\n");
-    send(sock, buffer, strlen(buffer), 0);
-}
-
-// A function to receive the response from the server and write it to a file
-void receive_response(int sock, char *filename) {
-    char buffer[BUFFER_SIZE];
-    int n;
-    
-    FILE *fp = fopen(filename, "w");
-    
-     // Read the status line
-     n = recv(sock, buffer, BUFFER_SIZE - 1, 0);
-     if (n <= 0) {
-         perror("recv");
-         exit(1);
-     }
-     buffer[n] = '\0';
-     printf("%s", buffer);
-
-     // Check if the status code is 200 OK
-     if (strstr(buffer, "200 OK") == NULL) {
-         fprintf(stderr, "The request failed\n");
-         exit(1);
-     }
-
-     // Read and ignore the headers until an empty line
-     while (1) {
-         n = recv(sock, buffer, BUFFER_SIZE - 1, 0);
-         if (n <= 0) {
-             perror("recv");
-             exit(1);
-         }
-         buffer[n] = '\0';
-         printf("%s", buffer);
-         if (strcmp(buffer, "\r\n") == 0 || strcmp(buffer, "\n") == 0) {
-             break;
-         }
-     }
-
-     // Check if the response has Content-Length header
-     int content_length = -1;
-     char *p = strstr(buffer, "Content-Length:");
-     if (p != NULL) {
-         p += strlen("Content-Length:");
-         content_length = atoi(p);
-     }
-
-     // Check if the response has Transfer-Encoding: chunked header
-     int chunked = 0;
-     p = strstr(buffer, "Transfer-Encoding: chunked");
-     if (p != NULL) {
-         chunked = 1;
-     }
-
-     // Read the body of the response
-     int total = 0;
-     while (1) {
-         if (content_length != -1) {
-             // If Content-Length is specified, read until the specified number of bytes
-             if (total >= content_length) {
-                 break;
-             }
-             n = recv(sock, buffer, BUFFER_SIZE - 1, 0);
-             if (n <= 0) {
-                 perror("recv");
-                 exit(1);
-             }
-             buffer[n] = '\0';
-             fwrite(buffer, 1, n, fp);
-             total += n;
-         } else if (chunked) {
-             // If Transfer-Encoding is chunked, read the chunk size and then the chunk data
-             n = recv(sock, buffer, BUFFER_SIZE - 1, 0);
-             if (n <= 0) {
-                 perror("recv");
-                 exit(1);
-             }
-             buffer[n] = '\0';
-             int chunk_size = strtol(buffer, NULL, 16); // Convert hex string to integer
-             if (chunk_size == 0) {
-                 break; // Last chunk has size zero
-             }
-             while (chunk_size > 0) {
-                 n = recv(sock, buffer, BUFFER_SIZE - 1, 0);
-                 if (n <= 0) {
-                     perror("recv");
-                     exit(1);
-                 }
-                 buffer[n] = '\0';
-                 if (n > chunk_size) {
-                     n = chunk_size; // Ignore the trailing \r\n after the chunk data
-                 }
-                 fwrite(buffer, 1, n, fp);
-                 chunk_size -= n;
-             }
-         } else {
-             // If neither Content-Length nor Transfer-Encoding is specified, read until the connection is closed
-             n = recv(sock, buffer, BUFFER_SIZE - 1, 0);
-             if (n < 0) {
-                 perror("recv");
-                 exit(1);
-             }
-             if (n == 0) {
-                 break; // Connection closed
-             }
-             buffer[n] = '\0';
-             fwrite(buffer, 1, n, fp);
-         }
-     }
-
-     fclose(fp);
-}
+#define MAX_RESPONSE_SIZE 4096
 
 int main(int argc, char *argv[]) {
-    char *url;
-    char *host;
-    char *path;
-    int port;
-    int sock;
-
     if (argc != 3) {
-        fprintf(stderr, "Usage: %s <url> <filename>\n", argv[0]);
-        exit(1);
+        fprintf(stderr, "Sử dụng: %s <URL> <output_file>\n", argv[0]);
+        return 1;
     }
 
-    url = argv[1];
-    parse_url(url, &host, &path, &port);
+    char *url = argv[1];
+    char *output_filename = argv[2];
+    char hostname[256];
+    char path[256];
 
-    sock = create_socket(host, port);
+    if (sscanf(url, "http://%255[^/]", hostname) == 1) {
+        // Trường hợp có path
+        if (strchr(url, '/')) {
+            int offset = strlen(hostname) + 7; // 7 là độ dài của "http://"
+            strncpy(path, url + offset, 255);
+            path[255] = '\0'; // Đảm bảo kết thúc chuỗi path
+        } else {
+            // Trường hợp không có path
+            path[0] = '\0';
+        }
+    } else {
+        fprintf(stderr, "URL không hợp lệ.\n");
+        return 1;
+    }
 
-    send_request(sock, host, path);
+    if (strlen(hostname) >= 256 || strlen(path) >= 256) {
+        fprintf(stderr, "Hostname hoặc path quá dài.\n");
+        return 1;
+    }
 
-    receive_response(sock, argv[2]);
+    struct hostent *host = gethostbyname(hostname);
+    if (!host) {
+        fprintf(stderr, "Không thể tìm thấy thông tin host.\n");
+        return 1;
+    }
 
-    close(sock);
+    // Lay dia chi host
+    struct sockaddr_in server_address;
+    server_address.sin_family = AF_INET;
+    server_address.sin_port = htons(80);
+    memcpy(&server_address.sin_addr, host->h_addr_list[0], host->h_length);
+    // Khoi tao mot socket
+    int client_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if (client_socket < 0) {
+        fprintf(stderr, "Không thể tạo socket.\n");
+        return 1;
+    }
+    // ket noi toi may chu
+    if (connect(client_socket, (struct sockaddr *)&server_address, sizeof(server_address)) < 0) {
+        fprintf(stderr, "Không thể kết nối tới máy chủ.\n");
+        return 1;
+    }
+
+    char request[512];
+    snprintf(request, sizeof(request), "GET /%s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", path, hostname);
+
+    if (send(client_socket, request, strlen(request), 0) < 0) {
+        fprintf(stderr, "Không thể gửi yêu cầu.\n");
+        return 1;
+    }
+
+    FILE *output_file = fopen(output_filename, "w");
+    if (!output_file) {
+        fprintf(stderr, "Không thể mở tệp để ghi nội dung.\n");
+        return 1;
+    }
+
+    char response[MAX_RESPONSE_SIZE];
+    ssize_t bytes_received;
+    int body_started = 0; // Dùng để xác định khi phần body bắt đầu
+
+    while ((bytes_received = recv(client_socket, response, sizeof(response) - 1, 0)) > 0) {
+        response[bytes_received] = '\0';
+        char *is_chunk = strstr(response, "Transfer-Encoding: chunked");
+        if (!is_chunk) {
+            if (!body_started) {
+                char *body_start = strstr(response, "\r\n\r\n");
+                if (body_start) {
+                    fprintf(output_file, "%s", body_start + 4);
+                    body_started = 1;
+                } else {
+                    fprintf(output_file, "%s", response);
+                }
+            } else {
+                fprintf(output_file, "%s", response);
+            }
+        } else {
+            is_chunk += 30;
+            while (1) {
+                char line[4096];
+                int chunk_size = 0;
+                if (is_chunk[0] == '\r' && is_chunk[1] == '\n') {
+                    break;
+                }
+
+                if (is_chunk[0] >= '0' && is_chunk[0] <= '9') {
+                    chunk_size = strtol(is_chunk, NULL, 16);
+                    if (chunk_size == 0) {
+                        break;
+                    }
+                }
+
+                is_chunk = strchr(is_chunk, '\n') + 1; // Di chuyển tới vị trí bắt đầu của dữ liệu chunk
+                int line_length = strlen(is_chunk);
+
+                if (line_length >= chunk_size) {
+                    fprintf(output_file, "%.*s", chunk_size, is_chunk);
+                    is_chunk += chunk_size + 2; // Bỏ qua dữ liệu chunk và "\r\n" sau nó
+                } else {
+                    fprintf(output_file, "%s", is_chunk);
+                    chunk_size -= line_length;
+                    is_chunk = NULL;
+                }
+            }
+        }
+    }
+
+    fclose(output_file);
+    close(client_socket);
 
     return 0;
 }
